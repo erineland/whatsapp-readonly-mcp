@@ -1,0 +1,4 @@
+# One chat per line. Copy to excluded_chats.txt.
+# id:123
+# Jane Smith
+# jid:447700900000@s.whatsapp.net
