@@ -30,6 +30,7 @@ Tools
 
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -436,7 +437,43 @@ HANDLERS = {"whatsapp_list_chats": tool_list_chats, "whatsapp_read_chat": tool_r
             "whatsapp_search": tool_search, "whatsapp_recent": tool_recent}
 
 
+# ── Terminal safety (10 Nov 2026) ─────────────────────────────────────────────
+# Everything this server returns can contain text other people wrote. Terminal control
+# characters in it (an ESC sequence, BEL, a bare CR, the C1 range) could act on whatever
+# terminal ends up displaying the output, so every reply is cleaned at its one exit,
+# respond(): C0 controls except tab and newline become visible Control Pictures (ESC → ␛),
+# DEL → ␡, C1 → �, and bidi embedding/override/isolate controls (which can reorder what's
+# shown) are dropped. ZWJ/ZWNJ and emoji tag sequences are left alone.
+_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_BIDI_CHARS = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
+
+
+def _control_picture(m):
+    c = ord(m.group())
+    if c < 0x20:
+        return chr(0x2400 + c)
+    return "\u2421" if c == 0x7F else "\ufffd"
+
+
+def clean_text(s):
+    """Return s with terminal control characters made visible (see above)."""
+    if not isinstance(s, str):
+        return s
+    s = _BIDI_CHARS.sub("", s.replace("\r\n", "\n"))
+    return _CTRL_CHARS.sub(_control_picture, s)
+
+
+def _clean_reply(result, error):
+    if isinstance(result, dict):
+        for item in result.get("content") or []:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                item["text"] = clean_text(item["text"])
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        error["message"] = clean_text(error["message"])
+
+
 def respond(msg_id, result=None, error=None):
+    _clean_reply(result, error)
     msg = {"jsonrpc": "2.0", "id": msg_id}
     msg["error" if error is not None else "result"] = error if error is not None else result
     sys.stdout.write(json.dumps(msg) + "\n")
